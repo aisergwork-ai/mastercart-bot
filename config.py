@@ -1,0 +1,26 @@
+"""Конфигурация бота-примерочной деревянных карт."""
+from __future__ import annotations
+
+import os
+from zoneinfo import ZoneInfo
+
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
+
+# AITUNNEL (Nano Banana / Gemini Image) — примерка карты на фото стены
+AITUNNEL_KEY = os.environ.get("AITUNNEL_KEY", "").strip()
+AITUNNEL_URL = os.environ.get("AITUNNEL_URL", "https://api.aitunnel.ru/v1/chat/completions").strip()
+AIMODEL = os.environ.get("AIMODEL", "gemini-3-pro-image-preview").strip()
+
+# Админы (Telegram id через запятую). Пусто -> первый /start станет админом.
+ADMIN_IDS = {int(x) for x in os.environ.get("ADMIN_IDS", "").replace(" ", "").split(",") if x.strip().isdigit()}
+# Чат менеджеров для заявок (можно задать и командой /setleadchat в нужном чате).
+LEAD_CHAT_ID = os.environ.get("LEAD_CHAT_ID", "").strip()
+
+# Лимит примерок на пользователя в сутки (контроль расходов на API). 0 = без лимита.
+MOCKUP_DAILY_LIMIT = int(os.environ.get("MOCKUP_DAILY_LIMIT", "5"))
+
+TZ = ZoneInfo(os.environ.get("TZ_NAME", "Asia/Yekaterinburg"))
+DB_PATH = os.environ.get("DB_PATH", "data/bot.db").strip()
+
+SITE_URL = os.environ.get("SITE_URL", "https://mastercart.shop").strip()
+BRAND = os.environ.get("BRAND", "МастерКарт").strip()
