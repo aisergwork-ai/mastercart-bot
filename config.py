@@ -9,7 +9,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 # AITUNNEL (Nano Banana / Gemini Image) — примерка карты на фото стены
 AITUNNEL_KEY = os.environ.get("AITUNNEL_KEY", "").strip()
 AITUNNEL_URL = os.environ.get("AITUNNEL_URL", "https://api.aitunnel.ru/v1/chat/completions").strip()
-AIMODEL = os.environ.get("AIMODEL", "gemini-3-pro-image-preview").strip()
+AIMODEL = os.environ.get("AIMODEL", "gemini-2.5-flash-image").strip()  # Flash — ~4x дешевле Pro
 
 # Админы (Telegram id через запятую). Пусто -> первый /start станет админом.
 ADMIN_IDS = {int(x) for x in os.environ.get("ADMIN_IDS", "").replace(" ", "").split(",") if x.strip().isdigit()}
