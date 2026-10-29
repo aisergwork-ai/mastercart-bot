@@ -49,6 +49,14 @@ def init_db():
                 product_id TEXT, created_at TEXT
             );
             CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
+            CREATE TABLE IF NOT EXISTS renders(
+                id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, product_id TEXT,
+                file_id TEXT, created_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS events(
+                id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, name TEXT,
+                product_id TEXT, day TEXT, created_at TEXT
+            );
             """
         )
         for uid in config.ADMIN_IDS:
@@ -119,3 +127,34 @@ def add_lead(user_id, name, phone, product_id) -> int:
 def recent_leads(limit=20):
     with db() as c:
         return c.execute("SELECT * FROM leads ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+
+
+# ── примерки пользователя (галерея «Мои примерки») ────────────────────────────
+def log_render(user_id, product_id, file_id):
+    with db() as c:
+        c.execute("INSERT INTO renders(user_id,product_id,file_id,created_at) VALUES(?,?,?,?)",
+                  (user_id, product_id, file_id, datetime.now(config.TZ).isoformat()))
+
+
+def recent_renders(user_id, limit=5):
+    with db() as c:
+        return c.execute("SELECT * FROM renders WHERE user_id=? ORDER BY id DESC LIMIT ?",
+                         (user_id, limit)).fetchall()
+
+
+# ── события воронки (аналитика) ───────────────────────────────────────────────
+def log_event(user_id, name, product_id=None):
+    now = datetime.now(config.TZ)
+    with db() as c:
+        c.execute("INSERT INTO events(user_id,name,product_id,day,created_at) VALUES(?,?,?,?,?)",
+                  (user_id, name, product_id, now.date().isoformat(), now.isoformat()))
+
+
+def event_counts(days=7):
+    """Возвращает {event_name: кол-во} за последние N дней и число уникальных юзеров."""
+    with db() as c:
+        rows = c.execute(
+            "SELECT name, COUNT(*) n, COUNT(DISTINCT user_id) u FROM events "
+            "WHERE created_at >= datetime('now', ?) GROUP BY name",
+            (f"-{int(days)} days",)).fetchall()
+    return {r["name"]: {"n": r["n"], "u": r["u"]} for r in rows}
