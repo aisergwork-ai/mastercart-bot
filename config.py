@@ -25,6 +25,13 @@ DB_PATH = os.environ.get("DB_PATH", "data/bot.db").strip()
 SITE_URL = os.environ.get("SITE_URL", "https://mastercart.shop").strip()
 BRAND = os.environ.get("BRAND", "МастерКарт").strip()
 
+# Акция после примерки. Показывается, пока админ не задаст своё через /setdiscount
+# (пустой текст в /setdiscount убирает акцию совсем).
+DISCOUNT_DEFAULT = os.environ.get(
+    "DISCOUNT_DEFAULT",
+    "Оставь заявку сейчас — и к заказу из бота добавим бесплатную гравировку на карте: "
+    "имя, важную дату или координаты твоего места. Жми «Заказать».").strip()
+
 # Пример «до/после» для хука на старте. Положи файлы в assets/ (или задай пути через env).
 # Кнопка показа примера появляется, только если оба файла существуют.
 _ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")

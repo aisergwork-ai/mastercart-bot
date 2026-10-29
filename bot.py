@@ -42,7 +42,8 @@ async def bot_link(context) -> str:
 
 
 def discount_text() -> str:
-    return (db.get_meta("discount_text") or "").strip()
+    val = db.get_meta("discount_text")  # None = админ не трогал -> дефолт; "" = намеренно убрано
+    return config.DISCOUNT_DEFAULT if val is None else val.strip()
 
 
 # ── меню / каталог ────────────────────────────────────────────────────────────
