@@ -133,6 +133,22 @@ async def ask_wall_width(message, context, pid: str, map_cm: int | None):
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Пропустить", callback_data="fitskip")]]))
 
 
+async def ask_placement(message, context):
+    context.user_data["pos_left_cm"] = None
+    context.user_data["pos_top_cm"] = None
+    context.user_data.pop("awaiting", None)
+    await message.reply_text(
+        "Где разместить карту на стене?",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("По центру", callback_data="posc")],
+            [InlineKeyboardButton("Указать отступы (слева/сверху)", callback_data="poso")],
+        ]))
+
+
+async def ask_photo(message):
+    await message.reply_text("Теперь пришли <b>одно фото</b> стены 📷", parse_mode="HTML")
+
+
 # ── колбэки ───────────────────────────────────────────────────────────────────
 async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -166,8 +182,17 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await ask_wall_width(q.message, context, pid, int(cm))
     elif data == "fitskip":
         context.user_data["wall_width_cm"] = None
+        await ask_placement(q.message, context)
+    elif data == "posc":
+        context.user_data["pos_left_cm"] = None
+        context.user_data["pos_top_cm"] = None
         context.user_data.pop("awaiting", None)
-        await q.message.reply_text("Ок, подберу масштаб на глаз. Пришли <b>одно фото</b> стены 📷", parse_mode="HTML")
+        await ask_photo(q.message)
+    elif data == "poso":
+        context.user_data["awaiting"] = "placement"
+        await q.message.reply_text(
+            "Напиши два числа в сантиметрах через пробел — <b>отступ слева</b> и <b>отступ сверху</b> "
+            "(от края стены и от потолка). Например: <code>40 30</code>", parse_mode="HTML")
     elif data == "refit":
         if context.user_data.get("fit_product"):
             await q.message.reply_text("Пришли новое фото стены 📷")
@@ -204,7 +229,9 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo = update.message.photo[-1]  # самое большое
         tgfile = await photo.get_file()
         wall_bytes = bytes(await tgfile.download_as_bytearray())
-        hint = aimockup.scale_hint(context.user_data.get("fit_map_cm"), context.user_data.get("wall_width_cm"))
+        hint = aimockup.build_hint(
+            context.user_data.get("fit_map_cm"), context.user_data.get("wall_width_cm"),
+            context.user_data.get("pos_left_cm"), context.user_data.get("pos_top_cm"))
         result = await asyncio.to_thread(aimockup.make_mockup, wall_bytes, catalog.image_path(p), hint)
     except Exception as e:  # noqa: BLE001
         log.exception("ошибка примерки")
@@ -238,7 +265,17 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         context.user_data["wall_width_cm"] = cm
         context.user_data.pop("awaiting", None)
-        await update.message.reply_text("Отлично. Теперь пришли <b>одно фото</b> стены 📷", parse_mode="HTML")
+        await ask_placement(update.message, context)
+        return
+    if awaiting == "placement":
+        nums = [n for n in (update.message.text or "").replace(",", " ").split() if n.lstrip("-").isdigit()]
+        if len(nums) < 2:
+            await update.message.reply_text("Нужно два числа в см через пробел: слева и сверху. Например: 40 30")
+            return
+        context.user_data["pos_left_cm"] = max(0, min(1000, int(nums[0])))
+        context.user_data["pos_top_cm"] = max(0, min(1000, int(nums[1])))
+        context.user_data.pop("awaiting", None)
+        await ask_photo(update.message)
         return
     if awaiting == "name":
         context.user_data["lead_name"] = (update.message.text or "").strip()[:100]

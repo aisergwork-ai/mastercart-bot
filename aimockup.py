@@ -38,14 +38,23 @@ def _data_url(src, max_side=1536) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
-def scale_hint(map_width_cm: int | None, wall_width_cm: int | None) -> str:
-    """Подсказка модели по масштабу: какую долю ширины стены занимает карта."""
-    if not map_width_cm or not wall_width_cm or wall_width_cm <= 0:
-        return ""
-    frac = max(5, min(95, round(map_width_cm / wall_width_cm * 100)))
-    return (f" IMPORTANT SIZE: the physical map is about {map_width_cm} cm wide; the wall in the "
-            f"photo is about {wall_width_cm} cm wide. Therefore the map must span about {frac}% of "
-            f"the visible wall width — size it exactly to this proportion, not smaller.")
+def build_hint(map_width_cm: int | None, wall_width_cm: int | None,
+               left_cm: int | None = None, top_cm: int | None = None) -> str:
+    """Подсказка модели по масштабу и позиции карты на стене."""
+    parts = []
+    if map_width_cm and wall_width_cm and wall_width_cm > 0:
+        frac = max(5, min(95, round(map_width_cm / wall_width_cm * 100)))
+        parts.append(f"the physical map is about {map_width_cm} cm wide and the wall is about "
+                     f"{wall_width_cm} cm wide, so the map must span about {frac}% of the visible "
+                     f"wall width — size it exactly to this proportion, not smaller.")
+    pos = []
+    if left_cm is not None:
+        pos.append(f"about {left_cm} cm from the left edge of the wall to the left edge of the map")
+    if top_cm is not None:
+        pos.append(f"about {top_cm} cm from the ceiling (top of the wall) to the top of the map")
+    if pos:
+        parts.append("Position the map so there is " + " and ".join(pos) + ".")
+    return (" IMPORTANT: " + " ".join(parts)) if parts else ""
 
 
 def make_mockup(wall_bytes: bytes, product_image_path: str, hint: str = "") -> bytes:
