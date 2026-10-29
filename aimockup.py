@@ -1,5 +1,12 @@
-"""Примерка карты на фото стены через AITUNNEL (Nano Banana / Gemini Image).
-Синхронная функция — в боте вызывать через asyncio.to_thread."""
+"""Примерка карты на фото стены.
+
+Два шага:
+1) compose_preview() — быстрый БЕСПЛАТНЫЙ предпросмотр: кладём реальное фото карты
+   на стену программно (Pillow), позиция/размер задаются долями. Клиент двигает
+   стрелками сколько угодно — без обращений к ИИ.
+2) enhance() — ОДНА платная генерация (AITUNNEL / Nano Banana): доводит готовую
+   вклейку до фотореализма (тени, подсветка, свет), НЕ меняя позицию/размер/дизайн.
+"""
 from __future__ import annotations
 
 import base64
@@ -8,25 +15,46 @@ import json
 import logging
 import urllib.request
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 import config
 
 log = logging.getLogger("aimockup")
 
-PROMPT = (
-    "You are given two photos. Photo 1 is the interior of a customer's room (walls, furniture). "
-    "Photo 2 is a real multi-layered wooden wall map (a physical product with raised wooden layers, "
-    "country/region labels and small blue lakes). "
-    "Task: realistically place the wooden map from Photo 2 onto the largest suitable empty wall in Photo 1. "
-    "Keep the map's exact design, proportions, colors and labels unchanged — do NOT redraw or restyle it. "
-    "Match the room's perspective and lighting, cast soft natural drop shadows from the map's raised layers, "
-    "and add a subtle warm LED backlight glow behind the map on the wall. By default center the map "
-    "horizontally on the empty wall and place it at eye level — its vertical center about 150 cm from the "
-    "floor, typically just above the sofa/furniture, NOT up near the ceiling. "
-    "Keep the rest of the room photo unchanged. Output one photorealistic image, as if "
-    "professionally photographed."
+ENHANCE_PROMPT = (
+    "This image shows a wooden wall map placed on a room wall as a flat overlay. Make it look "
+    "photorealistic: add natural soft drop shadows from the map's raised wooden layers, a warm LED "
+    "backlight glow behind the map, and match the room's lighting so it looks physically mounted on "
+    "the wall. Do NOT move, resize, redraw or restyle the map — keep its exact position, size, design, "
+    "colors and labels. Keep the rest of the room photo unchanged. Output one photorealistic image."
 )
+
+
+def _map_rgba(map_path: str, target_w: int):
+    """Фото карты с убранным белым фоном (мягкая альфа), масштабированное до ширины target_w."""
+    mp = Image.open(map_path).convert("RGB")
+    th = max(1, round(mp.height * target_w / mp.width))
+    mp = mp.resize((target_w, th), Image.LANCZOS)
+    r, g, b = mp.split()
+    minc = ImageChops.darker(ImageChops.darker(r, g), b)      # светлый фон -> ~255
+    alpha = minc.point(lambda p: 0 if p >= 232 else min(255, int((232 - p) * 3.0)))
+    mp.putalpha(alpha)
+    return mp
+
+
+def compose_preview(wall_bytes: bytes, map_path: str, cx: float, cy: float, sz: float) -> bytes:
+    """cx,cy — центр карты (доли ширины/высоты стены), sz — ширина карты (доля ширины стены)."""
+    wall = Image.open(io.BytesIO(wall_bytes)).convert("RGB")
+    W, H = wall.size
+    tw = max(40, min(W, round(sz * W)))
+    mp = _map_rgba(map_path, tw)
+    x = round(cx * W - mp.width / 2)
+    y = round(cy * H - mp.height / 2)
+    out = wall.copy()
+    out.paste(mp, (x, y), mp)
+    buf = io.BytesIO()
+    out.save(buf, format="JPEG", quality=88)
+    return buf.getvalue()
 
 
 def _data_url(src, max_side=1536) -> str:
@@ -40,41 +68,17 @@ def _data_url(src, max_side=1536) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
-def build_hint(map_width_cm: int | None, wall_width_cm: int | None,
-               left_cm: int | None = None, top_cm: int | None = None) -> str:
-    """Подсказка модели по масштабу и позиции карты на стене."""
-    parts = []
-    if map_width_cm and wall_width_cm and wall_width_cm > 0:
-        frac = max(5, min(95, round(map_width_cm / wall_width_cm * 100)))
-        parts.append(f"the physical map is about {map_width_cm} cm wide and the wall is about "
-                     f"{wall_width_cm} cm wide, so the map must span about {frac}% of the visible "
-                     f"wall width — size it exactly to this proportion, not smaller.")
-    pos = []
-    if left_cm is not None:
-        pos.append(f"about {left_cm} cm from the left edge of the wall to the left edge of the map")
-    if top_cm is not None:
-        pos.append(f"about {top_cm} cm from the ceiling (top of the wall) to the top of the map")
-    if pos:
-        parts.append("Position the map so there is " + " and ".join(pos) + ".")
-    return (" IMPORTANT: " + " ".join(parts)) if parts else ""
-
-
-def make_mockup(wall_bytes: bytes, product_image_path: str, hint: str = "") -> bytes:
-    """Возвращает PNG-байты примерки. Бросает RuntimeError при ошибке."""
+def enhance(composite_bytes: bytes) -> bytes:
+    """Доводит готовую вклейку до фотореализма одной генерацией. PNG-байты."""
     if not config.AITUNNEL_KEY:
         raise RuntimeError("AITUNNEL_KEY не задан")
-    wall_url = _data_url(Image.open(io.BytesIO(wall_bytes)))
-    prod_url = _data_url(product_image_path)
+    url = _data_url(Image.open(io.BytesIO(composite_bytes)))
     payload = {
         "model": config.AIMODEL,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": PROMPT + hint},
-                {"type": "image_url", "image_url": {"url": wall_url}},
-                {"type": "image_url", "image_url": {"url": prod_url}},
-            ],
-        }],
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": ENHANCE_PROMPT},
+            {"type": "image_url", "image_url": {"url": url}},
+        ]}],
         "modalities": ["image", "text"],
     }
     req = urllib.request.Request(
@@ -90,5 +94,10 @@ def make_mockup(wall_bytes: bytes, product_image_path: str, hint: str = "") -> b
     imgs = msg.get("images") or []
     if not imgs:
         raise RuntimeError("модель не вернула изображение: " + (msg.get("content") or "")[:200])
-    url = imgs[0]["image_url"]["url"]
-    return base64.b64decode(url.split(",", 1)[1])
+    return base64.b64decode(imgs[0]["image_url"]["url"].split(",", 1)[1])
+
+
+def default_size_fraction(map_cm, wall_cm) -> float:
+    if map_cm and wall_cm and wall_cm > 0:
+        return max(0.15, min(0.9, map_cm / wall_cm))
+    return 0.5
