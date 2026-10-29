@@ -198,6 +198,15 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.message.reply_text("Пришли новое фото стены 📷")
         else:
             await q.message.reply_text("Выбери карту в каталоге:", reply_markup=catalog_kb())
+    elif data.startswith("adj:"):
+        d = data.split(":")[1]
+        adj = context.user_data.setdefault("adj", {"hx": 0, "vy": 0, "sz": 0})
+        step = {"left": ("hx", -1), "right": ("hx", 1), "up": ("vy", -1), "down": ("vy", 1),
+                "smaller": ("sz", -1), "bigger": ("sz", 1)}.get(d)
+        if step:
+            k, dv = step
+            adj[k] = max(-5, min(5, adj.get(k, 0) + dv))
+        await run_mockup(context, update.effective_chat.id, update.effective_user.id, q.message)
     elif data.startswith("order:"):
         pid = data.split(":", 1)[1]
         context.user_data["order_product"] = pid
@@ -206,34 +215,56 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ── приём фото стены → примерка ───────────────────────────────────────────────
-async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def adj_phrase(adj: dict) -> str:
+    out = []
+    if adj.get("hx"):
+        out.append(f"shift the map {'to the right' if adj['hx'] > 0 else 'to the left'} "
+                   f"by about {abs(adj['hx']) * 10}% of the wall width")
+    if adj.get("vy"):
+        out.append(f"move the map {'down' if adj['vy'] > 0 else 'up'} "
+                   f"by about {abs(adj['vy']) * 8}% of the wall height")
+    if adj.get("sz"):
+        out.append(f"make the map about {abs(adj['sz']) * 12}% {'larger' if adj['sz'] > 0 else 'smaller'}")
+    return (" Adjust position/size: " + "; ".join(out) + ".") if out else ""
+
+
+def result_kb(pid: str):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅️", callback_data="adj:left"),
+         InlineKeyboardButton("⬆️", callback_data="adj:up"),
+         InlineKeyboardButton("⬇️", callback_data="adj:down"),
+         InlineKeyboardButton("➡️", callback_data="adj:right")],
+        [InlineKeyboardButton("➖ мельче", callback_data="adj:smaller"),
+         InlineKeyboardButton("➕ крупнее", callback_data="adj:bigger")],
+        [InlineKeyboardButton("🛒 Заказать", callback_data=f"order:{pid}")],
+        [InlineKeyboardButton("🪄 Другое фото", callback_data="refit"),
+         InlineKeyboardButton("📐 Размер", callback_data=f"fit:{pid}")],
+        [InlineKeyboardButton("« В каталог", callback_data="catalog")],
+    ])
+
+
+async def run_mockup(context, chat_id, uid, reply_to):
+    """Генерирует примерку по сохранённому фото стены и текущим параметрам."""
     pid = context.user_data.get("fit_product")
-    if not pid:
-        await update.message.reply_text(
-            "Чтобы сделать примерку — выбери карту в каталоге и нажми «Примерить на свою стену».",
-            reply_markup=main_menu_kb())
+    p = catalog.get(pid or "")
+    file_id = context.user_data.get("last_wall_file_id")
+    if not p or not file_id:
+        await reply_to.reply_text("Пришли фото стены ещё раз 📷")
         return
-    p = catalog.get(pid)
-    if not p:
-        return
-    uid = update.effective_user.id
     if config.MOCKUP_DAILY_LIMIT and db.mockups_today(uid) >= config.MOCKUP_DAILY_LIMIT:
-        await update.message.reply_text(
+        await reply_to.reply_text(
             "На сегодня лимит бесплатных примерок исчерпан. Оставь контакт — менеджер поможет с подбором.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛒 Оставить заявку", callback_data=f"order:{pid}")]]))
         return
-
-    await context.bot.send_chat_action(update.effective_chat.id, ChatAction.UPLOAD_PHOTO)
-    msg = await update.message.reply_text("Генерирую примерку… 10–40 сек ⏳")
+    await context.bot.send_chat_action(chat_id, ChatAction.UPLOAD_PHOTO)
+    msg = await reply_to.reply_text("Генерирую примерку… 10–40 сек ⏳")
     try:
-        if update.message.photo:
-            tgfile = await update.message.photo[-1].get_file()   # самое большое
-        else:
-            tgfile = await update.message.document.get_file()    # картинка прислана файлом
+        tgfile = await context.bot.get_file(file_id)
         wall_bytes = bytes(await tgfile.download_as_bytearray())
         hint = aimockup.build_hint(
             context.user_data.get("fit_map_cm"), context.user_data.get("wall_width_cm"),
             context.user_data.get("pos_left_cm"), context.user_data.get("pos_top_cm"))
+        hint += adj_phrase(context.user_data.get("adj", {}))
         result = await asyncio.to_thread(aimockup.make_mockup, wall_bytes, catalog.image_path(p), hint)
     except Exception as e:  # noqa: BLE001
         log.exception("ошибка примерки")
@@ -242,15 +273,23 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db.log_mockup(uid, pid)
     with contextlib.suppress(Exception):
         await msg.delete()
-    await update.message.reply_photo(
+    await reply_to.reply_photo(
         InputFile(io.BytesIO(result), filename="mockup.png"),
-        caption=f"Вот как «{p['title']}» будет смотреться у тебя ✨\n(примерно — финальный вид зависит от размера и света)",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🛒 Заказать", callback_data=f"order:{pid}")],
-            [InlineKeyboardButton("🪄 Другое фото стены", callback_data="refit")],
-            [InlineKeyboardButton("📐 Другой размер", callback_data=f"fit:{pid}")],
-            [InlineKeyboardButton("« В каталог", callback_data="catalog")],
-        ]))
+        caption=f"«{p['title']}» у тебя на стене ✨\nСтрелками можно подвинуть, ± — размер. "
+                "(финальный вид зависит от реального размера и света)",
+        reply_markup=result_kb(pid))
+
+
+async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get("fit_product"):
+        await update.message.reply_text(
+            "Чтобы сделать примерку — выбери карту в каталоге и нажми «Примерить на свою стену».",
+            reply_markup=main_menu_kb())
+        return
+    file_id = update.message.photo[-1].file_id if update.message.photo else update.message.document.file_id
+    context.user_data["last_wall_file_id"] = file_id
+    context.user_data["adj"] = {"hx": 0, "vy": 0, "sz": 0}
+    await run_mockup(context, update.effective_chat.id, update.effective_user.id, update.message)
 
 
 # ── сбор заявки (имя → телефон) ───────────────────────────────────────────────

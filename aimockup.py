@@ -21,8 +21,10 @@ PROMPT = (
     "Task: realistically place the wooden map from Photo 2 onto the largest suitable empty wall in Photo 1. "
     "Keep the map's exact design, proportions, colors and labels unchanged — do NOT redraw or restyle it. "
     "Match the room's perspective and lighting, cast soft natural drop shadows from the map's raised layers, "
-    "and add a subtle warm LED backlight glow behind the map on the wall. Size the map appropriately for the "
-    "wall at eye level. Keep the rest of the room photo unchanged. Output one photorealistic image, as if "
+    "and add a subtle warm LED backlight glow behind the map on the wall. By default center the map "
+    "horizontally on the empty wall and place it at eye level — its vertical center about 150 cm from the "
+    "floor, typically just above the sofa/furniture, NOT up near the ceiling. "
+    "Keep the rest of the room photo unchanged. Output one photorealistic image, as if "
     "professionally photographed."
 )
 
