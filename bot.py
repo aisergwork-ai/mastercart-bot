@@ -118,6 +118,21 @@ async def show_product(context, chat_id, pid):
                                      parse_mode="HTML", reply_markup=product_kb(pid))
 
 
+async def ask_wall_width(message, context, pid: str, map_cm: int | None):
+    context.user_data["fit_product"] = pid
+    context.user_data["fit_map_cm"] = map_cm
+    context.user_data["wall_width_cm"] = None
+    context.user_data["awaiting"] = "wall_width"
+    p = catalog.get(pid)
+    size = f" ({map_cm}×{round(map_cm * 0.6)} см)" if map_cm else ""
+    await message.reply_text(
+        f"{p['title']}{size}.\n\n"
+        "Чтобы подобрать <b>правильный масштаб</b>, напиши примерную <b>ширину стены в метрах</b> "
+        "(например, 3 или 2.5).",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Пропустить", callback_data="fitskip")]]))
+
+
 # ── колбэки ───────────────────────────────────────────────────────────────────
 async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -137,14 +152,27 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_product(context, chat_id, data.split(":", 1)[1])
     elif data.startswith("fit:"):
         pid = data.split(":", 1)[1]
-        context.user_data["fit_product"] = pid
-        context.user_data.pop("awaiting", None)
         p = catalog.get(pid)
-        await q.message.reply_text(
-            f"Отличный выбор — {p['title']}.\n\n"
-            "Пришли <b>одно фото</b> стены, где хочешь повесить карту "
-            "(просто сфотографируй с телефона). Через полминуты верну примерку.",
-            parse_mode="HTML")
+        widths = p.get("widths_cm") or []
+        if len(widths) > 1:
+            rows = [[InlineKeyboardButton(f"{w}×{round(w * 0.6)} см", callback_data=f"fitsize:{pid}:{w}")]
+                    for w in widths]
+            await q.message.reply_text(f"{p['title']} — выбери размер карты:",
+                                       reply_markup=InlineKeyboardMarkup(rows))
+        else:
+            await ask_wall_width(q.message, context, pid, widths[0] if widths else None)
+    elif data.startswith("fitsize:"):
+        _, pid, cm = data.split(":")
+        await ask_wall_width(q.message, context, pid, int(cm))
+    elif data == "fitskip":
+        context.user_data["wall_width_cm"] = None
+        context.user_data.pop("awaiting", None)
+        await q.message.reply_text("Ок, подберу масштаб на глаз. Пришли <b>одно фото</b> стены 📷", parse_mode="HTML")
+    elif data == "refit":
+        if context.user_data.get("fit_product"):
+            await q.message.reply_text("Пришли новое фото стены 📷")
+        else:
+            await q.message.reply_text("Выбери карту в каталоге:", reply_markup=catalog_kb())
     elif data.startswith("order:"):
         pid = data.split(":", 1)[1]
         context.user_data["order_product"] = pid
@@ -176,7 +204,8 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         photo = update.message.photo[-1]  # самое большое
         tgfile = await photo.get_file()
         wall_bytes = bytes(await tgfile.download_as_bytearray())
-        result = await asyncio.to_thread(aimockup.make_mockup, wall_bytes, catalog.image_path(p))
+        hint = aimockup.scale_hint(context.user_data.get("fit_map_cm"), context.user_data.get("wall_width_cm"))
+        result = await asyncio.to_thread(aimockup.make_mockup, wall_bytes, catalog.image_path(p), hint)
     except Exception as e:  # noqa: BLE001
         log.exception("ошибка примерки")
         await msg.edit_text(f"Не получилось сделать примерку 😔 Попробуй другое фото.\n({str(e)[:120]})")
@@ -189,7 +218,8 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption=f"Вот как «{p['title']}» будет смотреться у тебя ✨\n(примерно — финальный вид зависит от размера и света)",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🛒 Заказать", callback_data=f"order:{pid}")],
-            [InlineKeyboardButton("🪄 Другое фото стены", callback_data=f"fit:{pid}")],
+            [InlineKeyboardButton("🪄 Другое фото стены", callback_data="refit")],
+            [InlineKeyboardButton("📐 Другой размер", callback_data=f"fit:{pid}")],
             [InlineKeyboardButton("« В каталог", callback_data="catalog")],
         ]))
 
@@ -197,6 +227,19 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── сбор заявки (имя → телефон) ───────────────────────────────────────────────
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     awaiting = context.user_data.get("awaiting")
+    if awaiting == "wall_width":
+        txt = (update.message.text or "").replace(",", ".").strip()
+        try:
+            cm = int(round(float(txt) * 100))
+            if not (50 <= cm <= 2000):
+                raise ValueError
+        except ValueError:
+            await update.message.reply_text("Напиши ширину стены в метрах числом — например 3 или 2.5. Или нажми «Пропустить».")
+            return
+        context.user_data["wall_width_cm"] = cm
+        context.user_data.pop("awaiting", None)
+        await update.message.reply_text("Отлично. Теперь пришли <b>одно фото</b> стены 📷", parse_mode="HTML")
+        return
     if awaiting == "name":
         context.user_data["lead_name"] = (update.message.text or "").strip()[:100]
         context.user_data["awaiting"] = "phone"

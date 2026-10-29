@@ -38,7 +38,17 @@ def _data_url(src, max_side=1536) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
-def make_mockup(wall_bytes: bytes, product_image_path: str) -> bytes:
+def scale_hint(map_width_cm: int | None, wall_width_cm: int | None) -> str:
+    """Подсказка модели по масштабу: какую долю ширины стены занимает карта."""
+    if not map_width_cm or not wall_width_cm or wall_width_cm <= 0:
+        return ""
+    frac = max(5, min(95, round(map_width_cm / wall_width_cm * 100)))
+    return (f" IMPORTANT SIZE: the physical map is about {map_width_cm} cm wide; the wall in the "
+            f"photo is about {wall_width_cm} cm wide. Therefore the map must span about {frac}% of "
+            f"the visible wall width — size it exactly to this proportion, not smaller.")
+
+
+def make_mockup(wall_bytes: bytes, product_image_path: str, hint: str = "") -> bytes:
     """Возвращает PNG-байты примерки. Бросает RuntimeError при ошибке."""
     if not config.AITUNNEL_KEY:
         raise RuntimeError("AITUNNEL_KEY не задан")
@@ -49,7 +59,7 @@ def make_mockup(wall_bytes: bytes, product_image_path: str) -> bytes:
         "messages": [{
             "role": "user",
             "content": [
-                {"type": "text", "text": PROMPT},
+                {"type": "text", "text": PROMPT + hint},
                 {"type": "image_url", "image_url": {"url": wall_url}},
                 {"type": "image_url", "image_url": {"url": prod_url}},
             ],
