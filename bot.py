@@ -133,8 +133,17 @@ async def ask_wall_width(message, context, pid: str, map_cm: int | None):
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Пропустить", callback_data="fitskip")]]))
 
 
+PHOTO_TIP = (
+    "Теперь пришли <b>одно фото</b> стены 📷\n\n"
+    "Чтобы примерка вышла точной и наглядной:\n"
+    "• снимай стену <b>прямо, фронтально</b> (встань напротив), а не сбоку;\n"
+    "• держи телефон ровно, без наклона — стена должна быть прямой в кадре;\n"
+    "• отойди на 1.5–2 м, чтобы в кадр попала вся стена целиком."
+)
+
+
 async def ask_photo(message):
-    await message.reply_text("Теперь пришли <b>одно фото</b> стены 📷", parse_mode="HTML")
+    await message.reply_text(PHOTO_TIP, parse_mode="HTML")
 
 
 # ── колбэки ───────────────────────────────────────────────────────────────────
@@ -173,7 +182,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await ask_photo(q.message)
     elif data == "refit":
         if context.user_data.get("fit_product"):
-            await q.message.reply_text("Пришли новое фото стены 📷")
+            await q.message.reply_text(PHOTO_TIP, parse_mode="HTML")
         else:
             await q.message.reply_text("Выбери карту в каталоге:", reply_markup=catalog_kb())
     elif data.startswith("adj:"):
