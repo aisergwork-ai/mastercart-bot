@@ -226,8 +226,10 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(update.effective_chat.id, ChatAction.UPLOAD_PHOTO)
     msg = await update.message.reply_text("Генерирую примерку… 10–40 сек ⏳")
     try:
-        photo = update.message.photo[-1]  # самое большое
-        tgfile = await photo.get_file()
+        if update.message.photo:
+            tgfile = await update.message.photo[-1].get_file()   # самое большое
+        else:
+            tgfile = await update.message.document.get_file()    # картинка прислана файлом
         wall_bytes = bytes(await tgfile.download_as_bytearray())
         hint = aimockup.build_hint(
             context.user_data.get("fit_map_cm"), context.user_data.get("wall_width_cm"),
@@ -322,7 +324,7 @@ def main():
     app.add_handler(CommandHandler("setleadchat", cmd_setleadchat))
     app.add_handler(CommandHandler("leads", cmd_leads))
     app.add_handler(CallbackQueryHandler(on_cb))
-    app.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, on_photo))
+    app.add_handler(MessageHandler((filters.PHOTO | filters.Document.IMAGE) & filters.ChatType.PRIVATE, on_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, on_text))
     log.info("бот запущен, товаров: %s", len(catalog.PRODUCTS))
     app.run_polling(allowed_updates=Update.ALL_TYPES)
