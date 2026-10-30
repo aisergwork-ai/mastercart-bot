@@ -77,6 +77,7 @@ def product_kb(pid: str):
     rows = []
     if p and catalog.is_fittable(p):
         rows.append([InlineKeyboardButton("🪄 Примерить на свою стену", callback_data=f"fit:{pid}")])
+    rows.append([InlineKeyboardButton("🧮 Собрать комплектацию и цену", callback_data=f"cfg:{pid}")])
     rows.append([InlineKeyboardButton("🛒 Заказать / задать вопрос", callback_data=f"order:{pid}")])
     rows.append([InlineKeyboardButton("« Назад", callback_data="catalog")])
     return InlineKeyboardMarkup(rows)
@@ -290,10 +291,30 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_preview(context, q.message, edit=True)
     elif data == "render":
         await do_render(context, q.message, update.effective_user.id)
+    elif data.startswith("cfg:"):
+        await show_cfg_sizes(context, q.message, data.split(":", 1)[1])
+    elif data.startswith("cfgsz:"):
+        _, pid, w = data.split(":")
+        start_cfg(context, pid, int(w))
+        await send_config(context, q.message, edit=False)
+    elif data.startswith("cfgled:"):
+        cfg = context.user_data.get("cfg")
+        if cfg:
+            cfg["led"] = data.split(":", 1)[1]
+        await send_config(context, q.message, edit=True)
+    elif data.startswith("cfgt:"):
+        opt = data.split(":", 1)[1]
+        cfg = context.user_data.get("cfg")
+        if cfg:
+            cfg[opt] = not cfg.get(opt)
+        await send_config(context, q.message, edit=True)
+    elif data == "cfgorder":
+        await cfg_to_order(context, q.message, update.effective_user.id)
     elif data.startswith("order:"):
         pid = data.split(":", 1)[1]
         db.log_event(update.effective_user.id, "order_start", pid)
         context.user_data["order_product"] = pid
+        context.user_data.pop("order_spec", None)
         context.user_data["awaiting"] = "name"
         await q.message.reply_text("Как тебя зовут?")
 
@@ -414,6 +435,116 @@ async def show_myfits(context, message, uid):
             await context.bot.send_photo(message.chat_id, r["file_id"], caption=pt, reply_markup=kb)
 
 
+# ── конфигуратор комплектации (размер + опции → цена) ─────────────────────────
+LED_LABELS = {"none": "нет", "wire": "провода", "acc": "аккумулятор"}
+
+
+def start_cfg(context, pid: str, w: int):
+    context.user_data["cfg"] = {"pid": pid, "w": w, "led": "wire",
+                                "multicolor": False, "org": False, "ant": False, "eng": False}
+
+
+def cfg_total(p: dict, cfg: dict) -> int:
+    s = catalog.size_of(p, cfg["w"])
+    if not s:
+        return 0
+    t = s.get("base") or 0
+    if cfg["led"] == "wire" and s.get("led"):
+        t += s["led"]
+    if cfg["led"] == "acc" and s.get("led_acc"):
+        t += s["led_acc"]
+    if cfg["led"] != "none" and cfg.get("multicolor"):
+        t += catalog.LED_MULTICOLOR_EXTRA
+    if cfg.get("org") and s.get("org"):
+        t += s["org"]
+    if cfg.get("ant") and s.get("ant"):
+        t += s["ant"]
+    if cfg.get("eng") and s.get("eng"):
+        t += s["eng"]
+    return t
+
+
+def cfg_spec(p: dict, cfg: dict, html: bool = False) -> str:
+    s = catalog.size_of(p, cfg["w"])
+    title = f"<b>{p['title']}</b>" if html else p["title"]
+    total = catalog.fmt_price(cfg_total(p, cfg))
+    total_line = f"<b>Итого: {total}</b>" if html else f"Итого: {total}"
+    led = LED_LABELS[cfg["led"]] + (", многоцвет" if cfg["led"] != "none" and cfg["multicolor"] else "")
+    lines = [title, f"Размер: {s['w']}×{s['h']} см", f"Подсветка: {led}"]
+    extras = [n for n, k in (("оргстекло", "org"), ("Антарктида", "ant"), ("гравировка", "eng")) if cfg.get(k)]
+    if extras:
+        lines.append("Доп: " + ", ".join(extras))
+    lines.append(total_line)
+    return "\n".join(lines)
+
+
+def cfg_kb(p: dict, cfg: dict):
+    s = catalog.size_of(p, cfg["w"])
+    dot = lambda v: "🔘 " if v else "⚪ "
+    chk = lambda v: "✅ " if v else "⬜ "
+    rows = [
+        [InlineKeyboardButton(dot(cfg["led"] == "wire") + f"подсветка провода +{catalog.fmt_price(s['led'])}",
+                              callback_data="cfgled:wire")],
+        [InlineKeyboardButton(dot(cfg["led"] == "acc") + f"подсветка аккумулятор +{catalog.fmt_price(s['led_acc'])}",
+                              callback_data="cfgled:acc")],
+        [InlineKeyboardButton(dot(cfg["led"] == "none") + "без подсветки", callback_data="cfgled:none")],
+    ]
+    if cfg["led"] != "none":
+        rows.append([InlineKeyboardButton(
+            chk(cfg["multicolor"]) + f"многоцветная подсветка +{catalog.fmt_price(catalog.LED_MULTICOLOR_EXTRA)}",
+            callback_data="cfgt:multicolor")])
+    if s.get("org"):
+        rows.append([InlineKeyboardButton(chk(cfg["org"]) + f"оргстекло +{catalog.fmt_price(s['org'])}",
+                                          callback_data="cfgt:org")])
+    if s.get("ant"):
+        rows.append([InlineKeyboardButton(chk(cfg["ant"]) + f"Антарктида +{catalog.fmt_price(s['ant'])}",
+                                          callback_data="cfgt:ant")])
+    if s.get("eng"):
+        rows.append([InlineKeyboardButton(chk(cfg["eng"]) + f"цветная гравировка +{catalog.fmt_price(s['eng'])}",
+                                          callback_data="cfgt:eng")])
+    rows.append([InlineKeyboardButton("🛒 Заказать эту комплектацию", callback_data="cfgorder")])
+    rows.append([InlineKeyboardButton("📐 Другой размер", callback_data=f"cfg:{p['id']}")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def show_cfg_sizes(context, message, pid: str):
+    p = catalog.get(pid)
+    if not p:
+        return
+    rows = [[InlineKeyboardButton(f"{s['w']}×{s['h']} см — от {catalog.fmt_price(s['base'])}",
+                                  callback_data=f"cfgsz:{pid}:{s['w']}")] for s in catalog.sizes(p)]
+    rows.append([InlineKeyboardButton("« Назад", callback_data=f"prod:{pid}")])
+    await message.reply_text(f"{p['title']} — выбери размер:", reply_markup=InlineKeyboardMarkup(rows))
+
+
+async def send_config(context, message, edit: bool):
+    cfg = context.user_data.get("cfg")
+    if not cfg:
+        await message.reply_text("Собери комплектацию заново — открой карту в каталоге.",
+                                 reply_markup=main_menu_kb())
+        return
+    p = catalog.get(cfg["pid"])
+    text = "Собери комплектацию (цена обновляется):\n\n" + cfg_spec(p, cfg, html=True)
+    if edit:
+        with contextlib.suppress(Exception):
+            await message.edit_text(text, parse_mode="HTML", reply_markup=cfg_kb(p, cfg))
+            return
+    await message.reply_text(text, parse_mode="HTML", reply_markup=cfg_kb(p, cfg))
+
+
+async def cfg_to_order(context, message, uid):
+    cfg = context.user_data.get("cfg")
+    if not cfg:
+        await message.reply_text("Комплектация не найдена — собери заново.")
+        return
+    p = catalog.get(cfg["pid"])
+    db.log_event(uid, "order_start", cfg["pid"])
+    context.user_data["order_product"] = cfg["pid"]
+    context.user_data["order_spec"] = cfg_spec(p, cfg, html=False)
+    context.user_data["awaiting"] = "name"
+    await message.reply_text("Отличный выбор! Как тебя зовут?")
+
+
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.user_data.get("fit_product"):
         await update.message.reply_text(
@@ -474,14 +605,16 @@ async def submit_lead(update: Update, context: ContextTypes.DEFAULT_TYPE, phone:
     pid = context.user_data.get("order_product", "")
     lead_id = db.add_lead(update.effective_user.id, name, phone, pid)
     db.log_event(update.effective_user.id, "lead", pid)
+    spec = context.user_data.get("order_spec")
     context.user_data.pop("awaiting", None)
+    context.user_data.pop("order_spec", None)
     await update.message.reply_text(
         "Спасибо! Заявка принята ✅ Менеджер скоро свяжется.", reply_markup=ReplyKeyboardRemove())
     await update.message.reply_text("Что дальше?", reply_markup=main_menu_kb())
-    await forward_lead(context, lead_id, name, phone, pid, update.effective_user)
+    await forward_lead(context, lead_id, name, phone, pid, update.effective_user, spec)
 
 
-async def forward_lead(context, lead_id, name, phone, pid, user):
+async def forward_lead(context, lead_id, name, phone, pid, user, spec=None):
     chat = db.get_meta("lead_chat") or config.LEAD_CHAT_ID
     if not chat:
         log.warning("lead_chat не задан — заявка #%s не переслана", lead_id)
@@ -489,8 +622,10 @@ async def forward_lead(context, lead_id, name, phone, pid, user):
     p = catalog.get(pid or "")
     pt = p["title"] if p else "—"
     uname = f"@{user.username}" if user.username else f"id {user.id}"
+    # если собрана комплектация — шлём её целиком, иначе просто название карты
+    card_block = f"Комплектация:\n{spec}" if spec else f"Карта: {pt}"
     text = (f"🛒 <b>Заявка #{lead_id}</b>\n"
-            f"Имя: {name}\nТелефон: {phone}\nКарта: {pt}\nКлиент: {uname}")
+            f"Имя: {name}\nТелефон: {phone}\n{card_block}\nКлиент: {uname}")
     with contextlib.suppress(Exception):
         await context.bot.send_message(int(chat), text, parse_mode="HTML")
 
