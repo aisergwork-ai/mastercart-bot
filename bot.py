@@ -199,7 +199,8 @@ async def ask_wall_width(message, context, pid: str, map_cm: int | None):
     context.user_data["wall_width_cm"] = None
     context.user_data["awaiting"] = "wall_width"
     p = catalog.get(pid)
-    size = f" ({map_cm}×{round(map_cm * 0.6)} см)" if map_cm else ""
+    s = catalog.size_of(p, map_cm) if map_cm else None
+    size = f" ({s['w']}×{s['h']} см, от {catalog.fmt_price(s['base'])})" if s else ""
     await message.reply_text(
         f"{p['title']}{size}.\n\n"
         "Чтобы подобрать <b>правильный масштаб</b>, напиши примерную <b>ширину стены в метрах</b> "
@@ -248,19 +249,18 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pid = data.split(":", 1)[1]
         db.log_event(chat_id, "fit_start", pid)
         p = catalog.get(pid)
-        widths = p.get("widths_cm") or []
-        if len(widths) > 1:
+        szs = catalog.sizes(p)
+        if len(szs) > 1:
             rows = []
-            for w in widths:
-                price = catalog.price_for(p, w)
-                label = f"{w}×{round(w * 0.6)} см"
-                if price:
-                    label += f" — {catalog.fmt_price(price)}"
-                rows.append([InlineKeyboardButton(label, callback_data=f"fitsize:{pid}:{w}")])
+            for s in szs:
+                label = f"{s['w']}×{s['h']} см"
+                if s.get("base"):
+                    label += f" — от {catalog.fmt_price(s['base'])}"
+                rows.append([InlineKeyboardButton(label, callback_data=f"fitsize:{pid}:{s['w']}")])
             await q.message.reply_text(f"{p['title']} — выбери размер карты:",
                                        reply_markup=InlineKeyboardMarkup(rows))
         else:
-            await ask_wall_width(q.message, context, pid, widths[0] if widths else None)
+            await ask_wall_width(q.message, context, pid, szs[0]["w"] if szs else None)
     elif data.startswith("fitsize:"):
         _, pid, cm = data.split(":")
         await ask_wall_width(q.message, context, pid, int(cm))
