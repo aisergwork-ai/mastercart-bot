@@ -73,11 +73,13 @@ def category_kb(cat_idx: int):
 
 
 def product_kb(pid: str):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🪄 Примерить на свою стену", callback_data=f"fit:{pid}")],
-        [InlineKeyboardButton("🛒 Заказать / задать вопрос", callback_data=f"order:{pid}")],
-        [InlineKeyboardButton("« Назад", callback_data="catalog")],
-    ])
+    p = catalog.get(pid)
+    rows = []
+    if p and catalog.is_fittable(p):
+        rows.append([InlineKeyboardButton("🪄 Примерить на свою стену", callback_data=f"fit:{pid}")])
+    rows.append([InlineKeyboardButton("🛒 Заказать / задать вопрос", callback_data=f"order:{pid}")])
+    rows.append([InlineKeyboardButton("« Назад", callback_data="catalog")])
+    return InlineKeyboardMarkup(rows)
 
 
 WELCOME = (
