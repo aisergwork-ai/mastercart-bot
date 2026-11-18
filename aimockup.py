@@ -13,7 +13,9 @@ import base64
 import io
 import json
 import logging
+import urllib.error
 import urllib.request
+import uuid
 
 from PIL import Image, ImageChops
 
@@ -57,22 +59,48 @@ def compose_preview(wall_bytes: bytes, map_path: str, cx: float, cy: float, sz: 
     return buf.getvalue()
 
 
-def _data_url(src, max_side=1536) -> str:
-    im = Image.open(src).convert("RGB") if not isinstance(src, Image.Image) else src
+def _jpeg(im: Image.Image, max_side=1536) -> bytes:
+    im = im.convert("RGB")
     w, h = im.size
     if max(w, h) > max_side:
         k = max_side / max(w, h)
         im = im.resize((int(w * k), int(h * k)), Image.LANCZOS)
     buf = io.BytesIO()
     im.save(buf, format="JPEG", quality=90)
-    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+    return buf.getvalue()
 
 
-def enhance(composite_bytes: bytes) -> bytes:
-    """Доводит готовую вклейку до фотореализма одной генерацией. PNG-байты."""
-    if not config.AITUNNEL_KEY:
-        raise RuntimeError("AITUNNEL_KEY не задан")
-    url = _data_url(Image.open(io.BytesIO(composite_bytes)))
+def _multipart(fields: dict, files: dict) -> tuple[bytes, str]:
+    b = uuid.uuid4().hex
+    out = b""
+    for k, v in fields.items():
+        out += f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
+    for k, (fn, data, ct) in files.items():
+        out += (f'--{b}\r\nContent-Disposition: form-data; name="{k}"; filename="{fn}"\r\n'
+                f'Content-Type: {ct}\r\n\r\n').encode() + data + b"\r\n"
+    return out + f"--{b}--\r\n".encode(), "multipart/form-data; boundary=" + b
+
+
+def _enhance_edits(jpeg: bytes) -> bytes:
+    """Основной путь: /v1/images/edits (с ноября 2026 AITUNNEL отдаёт картинки только так)."""
+    body, ct = _multipart({"model": config.AIMODEL, "prompt": ENHANCE_PROMPT, "n": "1"},
+                          {"image": ("wall.jpg", jpeg, "image/jpeg")})
+    req = urllib.request.Request(config.AITUNNEL_IMG_URL, data=body,
+                                 headers={"Authorization": f"Bearer {config.AITUNNEL_KEY}", "Content-Type": ct})
+    try:
+        with urllib.request.urlopen(req, timeout=180) as r:
+            res = json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"AITUNNEL edits HTTP {e.code}: {e.read().decode()[:200]}")
+    data = res.get("data") or []
+    if not data or not data[0].get("b64_json"):
+        raise RuntimeError("edits: модель не вернула изображение")
+    return base64.b64decode(data[0]["b64_json"])
+
+
+def _enhance_chat(jpeg: bytes) -> bytes:
+    """Старый путь через chat/completions — запасной."""
+    url = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode()
     payload = {
         "model": config.AIMODEL,
         "messages": [{"role": "user", "content": [
@@ -89,12 +117,24 @@ def enhance(composite_bytes: bytes) -> bytes:
         with urllib.request.urlopen(req, timeout=180) as r:
             res = json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
-        raise RuntimeError(f"AITUNNEL HTTP {e.code}: {e.read().decode()[:200]}")
+        raise RuntimeError(f"AITUNNEL chat HTTP {e.code}: {e.read().decode()[:200]}")
     msg = (res.get("choices") or [{}])[0].get("message", {})
     imgs = msg.get("images") or []
     if not imgs:
-        raise RuntimeError("модель не вернула изображение: " + (msg.get("content") or "")[:200])
+        raise RuntimeError("chat: модель не вернула изображение: " + (msg.get("content") or "")[:200])
     return base64.b64decode(imgs[0]["image_url"]["url"].split(",", 1)[1])
+
+
+def enhance(composite_bytes: bytes) -> bytes:
+    """Доводит готовую вклейку до фотореализма одной генерацией. Байты изображения."""
+    if not config.AITUNNEL_KEY:
+        raise RuntimeError("AITUNNEL_KEY не задан")
+    jpeg = _jpeg(Image.open(io.BytesIO(composite_bytes)))
+    try:
+        return _enhance_edits(jpeg)
+    except Exception as e:
+        log.warning("images/edits не сработал (%s), пробую chat/completions", e)
+        return _enhance_chat(jpeg)
 
 
 def default_size_fraction(map_cm, wall_cm) -> float:
