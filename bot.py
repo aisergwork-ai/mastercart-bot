@@ -25,6 +25,8 @@ import db
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
 log = logging.getLogger("bot")
+# httpx на INFO пишет полный URL Telegram API вместе с токеном бота — глушим до WARNING
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 # ── вспомогательное ─────────────────────────────────────────────────────────────
